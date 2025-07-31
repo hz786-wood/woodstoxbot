@@ -1,0 +1,5 @@
+openai
+python-dotenv
+notion-client
+python-telegram-bot
+flask
