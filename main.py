@@ -1,27 +1,27 @@
 import os
-from flask import Flask, request
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, MessageHandler, ContextTypes, filters
+from flask import Flask, request
+import openai
 from notion_client import Client as NotionClient
+from telegram import Bot, Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import asyncio
 
+# Load environment variables
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("DATABASE_ID")
 
-# Notion setup
+# Initialize clients
+openai.api_key = OPENAI_API_KEY
 notion = NotionClient(auth=NOTION_TOKEN)
-
-# Flask app
+bot = Bot(token=TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Telegram app setup
-telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-# Notion search function
+# Fetch data from Notion stocklist
 def fetch_stock(query_text):
     response = notion.databases.query(
         **{
@@ -43,24 +43,30 @@ def fetch_stock(query_text):
         results.append(f"📦 {size}: {nos} pcs | {cft} CFT")
     return "\n".join(results) if results else "❌ No matching size found."
 
-# Message handler
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    result = fetch_stock(user_message)
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=result)
-
-telegram_app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-
-# Webhook route
+# Handle Telegram webhook
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    asyncio.run(telegram_app.process_update(update))
+def telegram_webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+
+    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_message = update.message.text
+        result = fetch_stock(user_message)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=result)
+
+    async def process_update():
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+        await application.initialize()
+        await application.process_update(update)
+        await application.shutdown()
+
+    asyncio.run(process_update())
     return "ok"
 
+# Home route
 @app.route("/", methods=["GET"])
 def index():
-    return "✅ Webhook is active!"
+    return "✅ WoodStox Bot is live!"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
